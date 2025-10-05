@@ -1,0 +1,5 @@
+{
+  "name": "Holter Management System",
+  "description": "A comprehensive system for doctors to manage Holter monitor appointments, inventory, patients, and reporting. All text is in Persian.",
+  "requestFramePermissions": []
+}
