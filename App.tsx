@@ -186,6 +186,7 @@ const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         updateAppointmentStatus(appointmentId, AppointmentStatus.Completed);
         
         setHolters(prev => prev.map(h => h.id === app.holterId ? { ...h, status: DeviceStatus.Available } : h));
+        // FIX: Changed Device.Available to DeviceStatus.Available as 'Device' is a type and not an enum.
         setCables(prev => prev.map(c => c.id === app.cableId ? { ...c, status: DeviceStatus.Available } : c));
     }, [appointments, updateAppointmentStatus]);
 
@@ -895,6 +896,23 @@ const HandoverPage: React.FC = () => {
     );
 };
 
+// Helper function to convert a blob to a Base64 string
+const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            if (typeof reader.result === 'string') {
+                resolve(reader.result.split(',')[1]);
+            } else {
+                reject(new Error('Failed to convert blob to base64'));
+            }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+};
+
+
 const ReportsPage: React.FC = () => {
     const { appointments, patients, holters, cables, releaseHolter, updateAppointmentStatus, editAppointment } = useAppContext();
     const [searchTerm, setSearchTerm] = useState('');
@@ -915,6 +933,98 @@ const ReportsPage: React.FC = () => {
             alert("نوبت با موفقیت ویرایش شد.");
         }
     };
+
+    const handlePdfExport = async () => {
+        // @ts-ignore
+        const { jsPDF } = window.jspdf;
+        // @ts-ignore
+        if (!jsPDF || !jsPDF.API.autoTable) {
+            alert("کتابخانه ساخت PDF بارگذاری نشده است.");
+            return;
+        }
+
+        try {
+            const fontUrl = 'https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn-font@33.0.3/fonts/TTF/Vazirmatn-Regular.ttf';
+            const fontResponse = await fetch(fontUrl);
+            if (!fontResponse.ok) throw new Error('فایل فونت قابل دانلود نیست.');
+            
+            const fontBlob = await fontResponse.blob();
+            const fontAsBase64 = await blobToBase64(fontBlob);
+            
+            const doc = new jsPDF();
+            
+            doc.addFileToVFS('Vazirmatn-Regular.ttf', fontAsBase64);
+            doc.addFont('Vazirmatn-Regular.ttf', 'Vazirmatn', 'normal');
+            doc.setFont('Vazirmatn');
+
+            const title = "گزارش کلی نوبت‌ها";
+            const textWidth = doc.getTextWidth(title);
+            const pageWidth = doc.internal.pageSize.getWidth();
+            doc.text(title, pageWidth - textWidth - 14, 15);
+
+            const head = [['بیمار', 'تاریخ نصب', 'تاریخ تحویل', 'هولتر/کابل', 'وضعیت', 'خدمات همراه']];
+
+            const body = filteredAppointments.map(app => {
+                const patient = getPatientInfo(app.patientId);
+                const holter = holters.find(h => h.id === app.holterId)?.serialNumber || 'N/A';
+                const cable = cables.find(c => c.id === app.cableId)?.serialNumber || 'N/A';
+                return [
+                    `${patient.name} (${patient.recordNumber})`,
+                    new Date(app.installDate).toLocaleString('fa-IR', {dateStyle: 'short', timeStyle: 'short'}),
+                    new Date(app.returnDate).toLocaleString('fa-IR', {dateStyle: 'short', timeStyle: 'short'}),
+                    `${holter} / ${cable}`,
+                    app.status,
+                    app.additionalServices.join('، ') || '-',
+                ];
+            });
+            
+            // @ts-ignore
+            doc.autoTable({
+                head: head,
+                body: body,
+                startY: 20,
+                styles: { font: 'Vazirmatn', halign: 'right' },
+                headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold' },
+                theme: 'grid',
+            });
+
+            doc.save('Holter-Report.pdf');
+
+        } catch (error) {
+            console.error("Error generating PDF:", error);
+            alert('خطا در تولید فایل PDF. لطفا اتصال اینترنت خود را بررسی کنید.');
+        }
+    };
+
+    const handleCsvExport = () => {
+        const head = ['بیمار', 'شماره پرونده', 'تاریخ نصب', 'تاریخ تحویل', 'هولتر', 'کابل', 'وضعیت', 'خدمات همراه'];
+        
+        const body = filteredAppointments.map(app => {
+            const patient = getPatientInfo(app.patientId);
+            const holter = holters.find(h => h.id === app.holterId)?.serialNumber || 'N/A';
+            const cable = cables.find(c => c.id === app.cableId)?.serialNumber || 'N/A';
+            return [
+                patient.name, patient.recordNumber,
+                new Date(app.installDate).toISOString(),
+                new Date(app.returnDate).toISOString(),
+                holter, cable, app.status,
+                `"${app.additionalServices.join(', ')}"`,
+            ];
+        });
+
+        let csvContent = "data:text/csv;charset=utf-8,\uFEFF" // BOM for Excel
+            + head.join(',') + '\n'
+            + body.map(e => e.join(',')).join('\n');
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "holter-report.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
 
     const EditModal = () => {
         
@@ -989,8 +1099,8 @@ const ReportsPage: React.FC = () => {
             <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-bold text-gray-900">گزارش کلی نوبت‌ها</h2>
                 <div>
-                     <button onClick={() => alert('Export to PDF')} className="bg-red-500 text-white px-4 py-2 rounded-md mr-2">خروجی PDF</button>
-                     <button onClick={() => alert('Export to Excel')} className="bg-green-500 text-white px-4 py-2 rounded-md">خروجی Excel</button>
+                     <button onClick={handlePdfExport} className="bg-red-500 text-white px-4 py-2 rounded-md mr-2">خروجی PDF</button>
+                     <button onClick={handleCsvExport} className="bg-green-500 text-white px-4 py-2 rounded-md">خروجی Excel</button>
                 </div>
             </div>
             <input 
@@ -998,7 +1108,7 @@ const ReportsPage: React.FC = () => {
                 placeholder="جستجو بر اساس نام یا شماره پرونده بیمار..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full p-2 mb-4 border rounded-md text-gray-900"
+                className="w-full p-2 mb-4 border rounded-md text-gray-900 bg-white"
             />
             <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
